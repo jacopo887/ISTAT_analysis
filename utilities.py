@@ -162,4 +162,69 @@ def download_situas():
     # give the file a clear name
     os.rename(situas_folder + "/" + downloaded, situas_file)
     print("saved:", situas_file)
- 
+
+
+
+
+#lookup tables and helpers used in the notebook
+
+from bs4 import BeautifulSoup
+
+# names of the macro areas (SITUAS "Codice Ripartizione geografica")
+macro_areas = {1: "North-West", 2: "North-East", 3: "Centre", 4: "South", 5: "Islands"}
+
+# names of the regions (SITUAS "Codice Regione")
+regions = {1: "Piemonte", 2: "Valle d'Aosta", 3: "Lombardia", 4: "Trentino-Alto Adige",
+           5: "Veneto", 6: "Friuli-Venezia Giulia", 7: "Liguria", 8: "Emilia-Romagna",
+           9: "Toscana", 10: "Umbria", 11: "Marche", 12: "Lazio", 13: "Abruzzo",
+           14: "Molise", 15: "Campania", 16: "Puglia", 17: "Basilicata", 18: "Calabria",
+           19: "Sicilia", 20: "Sardegna"}
+
+
+def read_codelist(codelist_id, codes):
+    # read the ISTAT metadata (xml) and return the meaning of the codes we ask for
+    f = open(folder + "/metadata_41_983.xml", encoding="utf-8")
+    soup = BeautifulSoup(f.read(), "xml")
+    f.close()
+
+    meanings = {}
+    codelist = soup.find("Codelist", {"id": codelist_id})
+    for code in codelist.find_all("Code"):
+        if code["id"] in codes:
+            meanings[code["id"]] = code.find("Name").text
+    return meanings
+
+
+# Export for Power BI 
+
+def export_powerbi(mun, big, df, national, forecast):
+    # save the 3 csv files used in the Power BI dashboard
+    os.makedirs("data/processed", exist_ok=True)
+
+    # 1. municipalities: add score and cluster (only for municipalities >= 10,000 inhabitants)
+    mun_export = mun.merge(big[["code", "score", "cluster_name"]], how="left", on="code")
+    mun_export["zone"] = mun_export["macro_area"].replace({"North-West": "Centre-North",
+                                                           "North-East": "Centre-North",
+                                                           "Centre": "Centre-North",
+                                                           "South": "South", "Islands": "South"})
+    mun_export["in_ranking"] = mun_export["population"] >= 10000
+    mun_export["rank"] = mun_export["score"].rank(ascending=False)
+    mun_export = mun_export.drop(columns=["years"])
+    mun_export.to_csv("data/processed/municipalities.csv", index=False)
+
+    # 2. one row per municipality and year
+    df.to_csv("data/processed/accidents_by_year.csv", index=False)
+
+    # 3. national totals + forecast in the same table
+    national_export = national.reset_index()[["year", "accidents", "injured", "killed"]]
+    national_export["type"] = "actual"
+    forecast_export = forecast.rename(columns={"accidents_forecast": "accidents",
+                                               "injured_forecast": "injured",
+                                               "killed_forecast": "killed"})
+    forecast_export["type"] = "forecast"
+    national_export = pd.concat([national_export, forecast_export], ignore_index=True)
+    national_export.to_csv("data/processed/national_trend.csv", index=False)
+
+    print("municipalities.csv:", mun_export.shape)
+    print("accidents_by_year.csv:", df.shape)
+    print("national_trend.csv:", national_export.shape)
